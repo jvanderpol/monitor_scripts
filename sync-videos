@@ -13,7 +13,7 @@ def md5_file(filename):
 
 def sync_videos(sync_dir):
   rclone_result = subprocess.run([
-    'rclone', 'sync', 'google-drive:Welcome Monitor Videos', sync_dir
+    'rclone', 'sync', 'google-drive:output/videos', sync_dir
   ])
   return rclone_result.returncode == 0
 
