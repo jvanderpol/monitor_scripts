@@ -1,0 +1,251 @@
+#!/usr/bin/python3
+
+from concurrent.futures import ThreadPoolExecutor
+from dataclasses import dataclass
+import argparse
+import hashlib
+import os
+import shutil
+import subprocess
+import sys
+import tempfile
+
+@dataclass
+class Resolution:
+  x: int
+  y: int
+
+  def __lt__(self, other):
+    return self.x * self.y < other.x * other.y
+
+@dataclass
+class Framerate:
+  duration: int
+  frames: int
+
+  def fraction(self) -> str:
+    return f'{self.duration}/{self.frames}'
+
+  def __lt__(self, other) -> bool:
+    return self.duration / self.frames < other.duration / self.frames
+
+@dataclass
+class VideoFile:
+  path: str
+  resolution: Resolution
+  framerate: Framerate
+  duration: float
+
+def list_files(folder: str) -> list[str]:
+  files = [os.path.join(folder, f) for f in os.listdir(folder)]
+  return sorted([f for f in files if os.path.isfile(f)])
+
+def get_video_files(folder: str) -> list[VideoFile]:
+  return [VideoFile(f, get_resolution(f), get_framerate(f), get_duration(f))
+          for f in list_files(folder)]
+
+def ffprobe(video_file: str, properties: str) -> str:
+ result = subprocess.run(
+     ['ffprobe', '-v', 'error', '-select_streams', 'v:0', '-show_entries',
+      f'stream={properties}', '-of', 'csv=p=0', video_file],
+     stdout=subprocess.PIPE, check=True)
+ return result.stdout.decode('utf-8')
+
+def get_framerate(video_file: str) -> Framerate:
+ split_output = ffprobe(video_file, 'avg_frame_rate').split('/')
+ return Framerate(int(split_output[0]), int(split_output[1]))
+
+def get_resolution(video_file: str) -> Resolution:
+ split_output = ffprobe(video_file, 'width,height').split(',')
+ return Resolution(int(split_output[0]), int(split_output[1]))
+
+def get_duration(video_file: str) -> float:
+ return float(ffprobe(video_file, 'duration'))
+
+def scale_image(
+    image_file: str, resolution: Resolution, output_folder: str, done_cb
+) -> str:
+  formatted_resolution = f'{resolution.x}x{resolution.y}'
+  output_file = os.path.join(output_folder, os.path.basename(image_file))
+  subprocess.run(
+      ['convert', image_file, '-resize', formatted_resolution,
+       '-background', 'black', '-gravity', 'center', '-extent',
+       formatted_resolution, output_file],
+      check=True)
+  done_cb()
+
+def create_ffmpeg_command(
+    input_images: list[str],
+    input_videos: list[VideoFile],
+    video_period: int,
+    image_display_duration: int,
+    image_transition_duration: int,
+    framerate: Framerate,
+    resolution: Resolution,
+    output_file: str
+) -> str:
+  image_num = 0
+
+  image_input_args = []
+  video_input_args = []
+  filter_complex = []
+  last_output = None
+  video_length = 0
+
+  for i, image in enumerate(input_images):
+    image_input_args.append(
+        f'-loop 1 -framerate {framerate.fraction()} '
+        f'-t {image_display_duration + image_transition_duration} '
+        f'-i "{image}"')
+    image_output = f'{i}fps_and_tb'
+    filter_complex.append(
+        f'[{i}]'
+        f'fps=fps={framerate.fraction()},settb=AVTB'
+        f'[{image_output}];')
+    if last_output:
+      output = f'{i}done'
+      filter_complex.append(
+          f'[{last_output}][{image_output}]'
+          f'xfade=transition=fade'
+          f':duration={image_transition_duration}'
+          f':offset={video_length - image_transition_duration}[{output}];')
+      video_length += image_display_duration
+      last_output = output
+    else:
+      last_output = image_output
+      video_length = image_display_duration + image_transition_duration
+    if (i + 1) % video_period == 0 and input_videos:
+      next_video = input_videos[0]
+      input_videos = input_videos[-1:] + input_videos[:-1]
+      video_input_args.append(f'-i {next_video.path}')
+      video_input = len(input_images) + len(video_input_args) - 1
+      video_settb_output = f'{video_input}tb'
+      filter_complex.append(
+          f'[{video_input}]fps=fps={framerate.fraction()},settb=AVTB'
+          f'[{video_settb_output}];')
+      if next_video.resolution == resolution:
+        transition_input = video_settb_output
+      else:
+        scaled_output = f'{video_input}scaled'
+        filter_complex.append(
+            f'[{video_settb_output}]'
+            f'scale={resolution.x}:{resolution.y}:'
+            f'force_original_aspect_ratio=decrease,'
+            f'pad={resolution.x}:{resolution.y}:(ow-iw)/2:(oh-ih)/2:color=black'
+            f'[{scaled_output}];')
+        transition_input = scaled_output
+      video_output = f'{video_input}done'
+      filter_complex.append(
+          f'[{last_output}][{transition_input}]'
+          f'xfade=transition=fade'
+          f':duration={image_transition_duration}'
+          f':offset={video_length - image_transition_duration}[{video_output}];'
+      )
+      video_length += next_video.duration - image_transition_duration
+      last_output = video_output
+
+  return (f'ffmpeg {" ".join(image_input_args + video_input_args)}'
+          f' -filter_complex "{" ".join(filter_complex)}"'
+          f' -map "[{last_output}]"'
+          f' -preset fast -codec:v libx264 -pix_fmt yuv420p -an -y'
+          f' {output_file}')
+
+def print_period():
+  print('.', end='', flush=True)
+
+def generate_slideshow(
+    image_dir: str,
+    video_dir: str,
+    output_video: str,
+    video_period: int,
+    image_duration: int,
+    image_transition_duration: int
+):
+  with tempfile.TemporaryDirectory() as temp_folder:
+    videos = get_video_files(video_dir)
+    max_resolution = max([v.resolution for v in videos])
+    max_framerate = max([v.framerate for v in videos])
+    print('Scaling images', end='', flush=True)
+    temp_image_folder = os.path.join(temp_folder, 'scaled_images')
+    os.makedirs(temp_image_folder)
+    with ThreadPoolExecutor(max_workers=5) as executor:
+      scale_futures = [
+          executor.submit(scale_image, image, max_resolution, temp_image_folder, print_period)
+          for image in list_files(image_dir)]
+      for future in scale_futures:
+        # Call future to propogate any exceptions
+        future.result()
+    scaled_images = list_files(temp_image_folder)
+
+    temp_output = os.path.join(temp_folder, 'output.mp4')
+    command = create_ffmpeg_command(
+        scaled_images,
+        videos,
+        video_period,
+        image_duration,
+        image_transition_duration,
+        max_framerate,
+        max_resolution,
+        temp_output
+    )
+    print(command)
+    subprocess.run(command, check=True, shell=True)
+    shutil.move(temp_output, output_video)
+
+def fingerprint_strings(strings: list[str]) -> str:
+  return hashlib.md5(''.join(strings).encode('utf-8')).hexdigest()
+
+def fingerprint_file(file_path: str):
+  with open(file_path,'rb') as file:
+    return fingerprint_strings([
+      hashlib.md5(file.read()).hexdigest(),
+      fingerprint_strings([file_path])
+    ])
+
+def fingerprint_folder(folder: str) -> str:
+  return fingerprint_strings([fingerprint_file(f) for f in list_files(folder)])
+
+def fingerprint(options) -> str:
+  return fingerprint_strings([
+    fingerprint_folder(options.image_dir),
+    fingerprint_folder(options.video_dir),
+    fingerprint_file(options.output_file),
+    str(options.video_period),
+    str(options.image_duration),
+    str(options.image_transition_duration)
+  ])
+
+def is_up_to_date(options) -> bool:
+  if not options.fingerprint_file or not os.path.exists(options.fingerprint_file):
+    return False
+  with open(options.fingerprint_file, 'r') as f:
+    cached_fingerprint = f.read()
+    current_fingerprint = fingerprint(options)
+    return cached_fingerprint == current_fingerprint
+
+if __name__ == '__main__':
+  parser = argparse.ArgumentParser()
+  parser.add_argument("--image_dir", required=True)
+  parser.add_argument("--video_dir", required=True)
+  parser.add_argument("--output_file", required=True)
+  parser.add_argument("--fingerprint_file")
+  parser.add_argument("--video_period", type=int, default=25)
+  parser.add_argument("--image_duration", type=int, default=4)
+  parser.add_argument("--image_transition_duration", type=int, default=1)
+  options = parser.parse_args()
+
+  if is_up_to_date(options):
+    print('Up to date')
+    sys.exit(0)
+
+  generate_slideshow(
+      options.image_dir,
+      options.video_dir,
+      options.output_file,
+      options.video_period,
+      options.image_duration,
+      options.image_transition_duration)
+
+  if options.fingerprint_file:
+    with open(options.fingerprint_file, 'w') as writer:
+      writer.write(fingerprint(options))
