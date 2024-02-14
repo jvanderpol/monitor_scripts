@@ -1,0 +1,21 @@
+#!/usr/bin/env bash
+
+if [ "$#" -lt 2 ]; then
+  echo "Usage $0 max_length log_file [log_file...]" >&2
+  exit 1
+fi
+max_length="$1"; shift
+for log_to_trim in "$@"; do
+  if ! test -f $log_to_trim; then
+    echo "$log_to_trim does not exist" >&2
+    exit 1
+  fi
+  tmpfile=$(mktemp)
+  if tail -c $max_length $log_to_trim > $tmpfile; then
+    mv $tmpfile $log_to_trim
+  else
+    echo "Error trimming $log_to_trim to $max_length" >&2
+    rm $tmpfile
+    exit 1
+  fi
+done
