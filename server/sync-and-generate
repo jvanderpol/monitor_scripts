@@ -6,8 +6,8 @@ import sys
 import argparse
 
 def print_and_run(command):
-  print(' '.join(command))
-  subprocess.run(command)
+  print(' '.join(command), flush=True)
+  subprocess.run(command, check=True)
 
 if __name__ == '__main__':
   parser = argparse.ArgumentParser()
@@ -17,17 +17,18 @@ if __name__ == '__main__':
   parser.add_argument("--video_dir", required=True)
   parser.add_argument("--rclone_output_dir", required=True)
   parser.add_argument("--output_file", required=True)
+  parser.add_argument("--rclone_bin", default='rclone')
   (options, args) = parser.parse_known_args()
 
-  print_and_run(['rclone', 'sync', options.rclone_image_dir, options.image_dir])
-  print_and_run(['rclone', 'sync', options.rclone_video_dir, options.video_dir])
+  print_and_run([options.rclone_bin, 'sync', options.rclone_image_dir, options.image_dir])
+  print_and_run([options.rclone_bin, 'sync', options.rclone_video_dir, options.video_dir])
   print_and_run([
       os.path.join(os.path.dirname(sys.argv[0]), 'generate-slideshow'),
       '--image_dir', options.image_dir,
       '--video_dir', options.video_dir,
       '--output_file', options.output_file,
       *args])
-  print_and_run(['rclone', 'sync',
+  print_and_run([options.rclone_bin, 'sync',
                  '--include', os.path.basename(options.output_file),
                  os.path.dirname(options.output_file),
                  options.rclone_output_dir])
