@@ -223,6 +223,11 @@ def is_up_to_date(options) -> bool:
     current_fingerprint = fingerprint(options)
     return cached_fingerprint == current_fingerprint
 
+def path_exists_or_exit(source: str, path: str):
+  if not os.path.exists(path):
+    print(f'{path} does not exist (source: {source})', file=sys.stderr)
+    sys.exit(1)
+
 if __name__ == '__main__':
   parser = argparse.ArgumentParser()
   parser.add_argument("--image_dir", required=True)
@@ -237,6 +242,10 @@ if __name__ == '__main__':
   if is_up_to_date(options):
     print('Up to date')
     sys.exit(0)
+
+  path_exists_or_exit('--image_dir', options.image_dir)
+  path_exists_or_exit('--video_dir', options.video_dir)
+  path_exists_or_exit('--output_file', os.path.dirname(options.output_file))
 
   generate_slideshow(
       options.image_dir,
