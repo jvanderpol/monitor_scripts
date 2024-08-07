@@ -5,6 +5,7 @@ from dataclasses import dataclass
 import argparse
 import hashlib
 import os
+import resource
 import shutil
 import subprocess
 import sys
@@ -153,6 +154,13 @@ def create_ffmpeg_command(
 def print_period():
   print('.', end='', flush=True)
 
+def set_open_file_descriptor_limit(file_limit):
+    (soft_limit, hard_limit) = resource.getrlimit(resource.RLIMIT_NOFILE)
+    new_soft_limit = min(max(soft_limit, file_limit), hard_limit)
+    if new_soft_limit > soft_limit:
+      print(f'Increasing file limit from {soft_limit} to {new_soft_limit}')
+      resource.setrlimit(resource.RLIMIT_NOFILE, (new_soft_limit, hard_limit))
+
 def generate_slideshow(
     image_dir: str,
     video_dir: str,
@@ -168,10 +176,15 @@ def generate_slideshow(
     print('Scaling images', end='', flush=True)
     temp_image_folder = os.path.join(temp_folder, 'scaled_images')
     os.makedirs(temp_image_folder)
+    images = list_files(image_dir)
+
+    # Allow for 5 files per raw input file
+    set_open_file_descriptor_limit(5 * (len(images) + len(videos)))
+
     with ThreadPoolExecutor(max_workers=5) as executor:
       scale_futures = [
           executor.submit(scale_image, image, max_resolution, temp_image_folder, print_period)
-          for image in list_files(image_dir)]
+          for image in images]
       for future in scale_futures:
         # Call future to propogate any exceptions
         future.result()
