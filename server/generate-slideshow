@@ -5,6 +5,7 @@ from dataclasses import dataclass
 import argparse
 import hashlib
 import os
+import re
 import resource
 import shutil
 import subprocess
@@ -40,6 +41,11 @@ class VideoFile:
 def list_files(folder: str) -> list[str]:
   files = [os.path.join(folder, f) for f in os.listdir(folder)]
   return sorted([f for f in files if os.path.isfile(f)])
+
+def get_image_files(folder: str) -> list[str]:
+  all_files = list_files(folder)
+  image_file_pattern = re.compile('.*\.(jpg|jpeg)', re.IGNORECASE)
+  return [f for f in all_files if image_file_pattern.match(f)]
 
 def get_video_files(folder: str) -> list[VideoFile]:
   return [VideoFile(f, get_resolution(f), get_framerate(f), get_duration(f))
@@ -176,7 +182,7 @@ def generate_slideshow(
     print('Scaling images', end='', flush=True)
     temp_image_folder = os.path.join(temp_folder, 'scaled_images')
     os.makedirs(temp_image_folder)
-    images = list_files(image_dir)
+    images = get_image_files(image_dir)
 
     # Allow for 5 files per raw input file
     set_open_file_descriptor_limit(5 * (len(images) + len(videos)))
