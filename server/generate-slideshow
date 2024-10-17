@@ -124,7 +124,7 @@ def create_ffmpeg_command(
     if (i + 1) % video_period == 0 and input_videos:
       next_video = input_videos[0]
       input_videos = input_videos[-1:] + input_videos[:-1]
-      video_input_args.append(f'-i {next_video.path}')
+      video_input_args.append(f'-i "{next_video.path}"')
       video_input = len(input_images) + len(video_input_args) - 1
       video_settb_output = f'{video_input}tb'
       filter_complex.append(
