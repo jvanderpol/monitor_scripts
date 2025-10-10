@@ -1,6 +1,7 @@
 #!/usr/bin/python3
 
 from concurrent.futures import ThreadPoolExecutor
+from contextlib import contextmanager
 from dataclasses import dataclass
 import argparse
 import hashlib
@@ -8,6 +9,7 @@ import os
 import re
 import resource
 import shutil
+import signal
 import subprocess
 import sys
 import tempfile
@@ -167,15 +169,27 @@ def set_open_file_descriptor_limit(file_limit):
       print(f'Increasing file limit from {soft_limit} to {new_soft_limit}')
       resource.setrlimit(resource.RLIMIT_NOFILE, (new_soft_limit, hard_limit))
 
+@contextmanager
+def use_signal_handler(signals, handler):
+  previous_handlers = {s: signal.getsignal(s) for s in signals}
+  for s in signals:
+    signal.signal(s, handler)
+  try:
+    yield
+  finally:
+    for s in signals:
+      signal.signal(s, previous_handlers[s])
+
 def generate_slideshow(
     image_dir: str,
     video_dir: str,
+    temp_dir: str,
     output_video: str,
     video_period: int,
     image_duration: int,
     image_transition_duration: int
 ):
-  with tempfile.TemporaryDirectory() as temp_folder:
+  with tempfile.TemporaryDirectory(dir=temp_dir) as temp_folder:
     videos = get_video_files(video_dir)
     max_resolution = max([v.resolution for v in videos])
     max_framerate = max([v.framerate for v in videos])
@@ -208,7 +222,15 @@ def generate_slideshow(
         temp_output
     )
     print(command)
-    subprocess.run(command, check=True, shell=True)
+    ffmpeg_process = subprocess.Popen(command, shell=True)
+    def signal_handler(signum, frame):
+      ffmpeg_process.kill()
+      shutil.rmtree(temp_folder)
+      raise Exception(f'Process killed with signal {signum}')
+    with use_signal_handler([signal.SIGTERM, signal.SIGINT], signal_handler):
+      ffmpeg_process.communicate()
+    if ffmpeg_process.returncode > 0:
+      raise Exception(f'ffmpeg failed with exit code {ffmpeg_process.returncode}')
     shutil.move(temp_output, output_video)
 
 def fingerprint_strings(strings: list[str]) -> str:
@@ -252,6 +274,7 @@ if __name__ == '__main__':
   parser.add_argument("--image_dir", required=True)
   parser.add_argument("--video_dir", required=True)
   parser.add_argument("--output_file", required=True)
+  parser.add_argument("--temp_dir")
   parser.add_argument("--fingerprint_file")
   parser.add_argument("--video_period", type=int, default=25)
   parser.add_argument("--image_duration", type=int, default=4)
@@ -265,10 +288,14 @@ if __name__ == '__main__':
   path_exists_or_exit('--image_dir', options.image_dir)
   path_exists_or_exit('--video_dir', options.video_dir)
   path_exists_or_exit('--output_file', os.path.dirname(options.output_file))
+  if options.temp_dir:
+    path_exists_or_exit('--temo_dir', os.path.dirname(options.temp_dir))
+
 
   generate_slideshow(
       options.image_dir,
       options.video_dir,
+      options.temp_dir,
       options.output_file,
       options.video_period,
       options.image_duration,
