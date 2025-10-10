@@ -47,7 +47,7 @@ def list_files(folder: str) -> list[str]:
 def get_image_files(folder: str) -> list[str]:
   all_files = list_files(folder)
   image_file_pattern = re.compile('.*\.(jpg|jpeg)', re.IGNORECASE)
-  return [f for f in all_files[0:20] if image_file_pattern.match(f)]
+  return [f for f in all_files if image_file_pattern.match(f)]
 
 def get_video_files(folder: str) -> list[VideoFile]:
   return [VideoFile(f, get_resolution(f), get_framerate(f), get_duration(f))
@@ -230,7 +230,7 @@ def generate_slideshow(
       ffmpeg_process.communicate()
     if ffmpeg_process.returncode > 0:
       raise Exception(f'ffmpeg failed with exit code {ffmpeg_process.returncode}')
-    #shutil.move(temp_output, output_video)
+    shutil.move(temp_output, output_video)
 
 def fingerprint_strings(strings: list[str]) -> str:
   return hashlib.md5(''.join(strings).encode('utf-8')).hexdigest()
