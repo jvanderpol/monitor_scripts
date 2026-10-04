@@ -153,8 +153,11 @@ def create_ffmpeg_command(
       video_length += next_video.duration - image_transition_duration
       last_output = video_output
 
+  with tempfile.NamedTemporaryFile(mode="w+", delete=False) as filter_complex_file:
+    filter_complex_file.write(" ".join(filter_complex))
+
   return (f'ffmpeg {" ".join(image_input_args + video_input_args)}'
-          f' -filter_complex "{" ".join(filter_complex)}"'
+          f' -/filter_complex {filter_complex_file.name}'
           f' -map "[{last_output}]"'
           f' -preset fast -codec:v libx264 -pix_fmt yuv420p -an -y'
           f' {output_file}')
